@@ -93,15 +93,97 @@ proc getData(client: ImapClient | AsyncImapClient, tag: string, listener: ImapLi
             break
 
 
-proc send(client: ImapClient | AsyncImapClient, cmd: string, listener: ImapListener = nil): Future[ImapCommandStatus] {.multisync.} =
-    let tag = client.genTag()
-    let cmd = tag & " " & cmd & CRLF
+proc send(client: ImapClient | AsyncImapClient, cmd: string, listener: ImapListener = nil, woTag = false): Future[ImapCommandStatus] {.multisync.} =
+    var
+        tag: string
+        svr_cmd: string
+
+    if woTag: # Without Tag
+        svr_cmd = cmd & CRLF
+    else:
+        tag = client.genTag()
+        svr_cmd = tag & " " & cmd & CRLF
 
     when defined(debugImap):
-        echo "SEND CMD: ", cmd
+        echo "SEND CMD: ", svr_cmd
 
-    await client.socket.send(cmd)
-    result = await client.getData(tag, listener)
+    await client.socket.send(svr_cmd)
+    if woTag:
+        result = icsOK # Always icsOK because not response expected
+    else:
+        result = await client.getData(tag, listener)
+
+
+proc idle*(client: ImapClient | AsyncImapClient, listener: ImapListener = nil): Future[ImapCommandStatus] {.multisync, discardable.} =
+  ## From RFC 2177
+  ## 
+  ##   IDLE Command
+  ##
+  ##   Arguments:  none
+  ##
+  ##   Responses:  continuation data will be requested; the client sends
+  ##               the continuation data "DONE" to end the command
+  ##
+  ##   Result:     OK - IDLE completed after client sent "DONE"
+  ##               NO - failure: the server will not allow the IDLE
+  ##                    command at this time
+  ##              BAD - command unknown or arguments invalid
+  ##
+  ##   The IDLE command may be used with any IMAP4 server implementation
+  ##   that returns "IDLE" as one of the supported capabilities to the
+  ##   CAPABILITY command.  If the server does not advertise the IDLE
+  ##   capability, the client MUST NOT use the IDLE command and must poll
+  ##   for mailbox updates.  In particular, the client MUST continue to be
+  ##   able to accept unsolicited untagged responses to ANY command, as
+  ##   specified in the base IMAP specification.
+  ##
+  ##   The IDLE command is sent from the client to the server when the
+  ##   client is ready to accept unsolicited mailbox update messages.  The
+  ##   server requests a response to the IDLE command using the continuation
+  ##   ("+") response.  The IDLE command remains active until the client
+  ##   responds to the continuation, and as long as an IDLE command is
+  ##   active, the server is now free to send untagged EXISTS, EXPUNGE, and
+  ##   other messages at any time.
+  ##
+  ##   The IDLE command is terminated by the receipt of a "DONE"
+  ##   continuation from the client; such response satisfies the server's
+  ##   continuation request.  At that point, the server MAY send any
+  ##   remaining queued untagged responses and then MUST immediately send
+  ##   the tagged response to the IDLE command and prepare to process other
+  ##   commands. As in the base specification, the processing of any new
+  ##   command may cause the sending of unsolicited untagged responses,
+  ##   subject to the ambiguity limitations.  The client MUST NOT send a
+  ##   command while the server is waiting for the DONE, since the server
+  ##   will not be able to distinguish a command from a continuation.
+  ##
+  ##   The server MAY consider a client inactive if it has an IDLE command
+  ##   running, and if such a server has an inactivity timeout it MAY log
+  ##   the client off implicitly at the end of its timeout period.  Because
+  ##   of that, clients using IDLE are advised to terminate the IDLE and
+  ##   re-issue it at least every 29 minutes to avoid being logged off.
+  ##   This still allows a client to receive immediate mailbox updates even
+  ##   though it need only "poll" at half hour intervals.sult = await client.send("IDLE", listener)
+  result = await client.send("IDLE", listener)
+
+
+proc done*(client: ImapClient | AsyncImapClient, listener: ImapListener = nil): Future[ImapCommandStatus] {.multisync, discardable.} =
+  ## From RFC 2177
+  ## 
+  ##   DONE Continuation Command (sent without a tag ie. woTag=true)
+  ##
+  ##   ***From the 3rd paragraph of IDLE Command documentation***
+  ##   The IDLE command is terminated by the receipt of a "DONE"
+  ##   continuation from the client; such response satisfies the server's
+  ##   continuation request.  At that point, the server MAY send any
+  ##   remaining queued untagged responses and then MUST immediately send
+  ##   the tagged response to the IDLE command and prepare to process other
+  ##   commands. As in the base specification, the processing of any new
+  ##   command may cause the sending of unsolicited untagged responses,
+  ##   subject to the ambiguity limitations.  The client MUST NOT send a
+  ##   command while the server is waiting for the DONE, since the server
+  ##   will not be able to distinguish a command from a continuation.
+  ##
+  result = await client.send("DONE", listener, woTag=true)
 
 
 proc connect*(client: ImapClient | AsyncImapClient, host: string, port: Port, listener: ImapListener = nil): Future[ImapCommandStatus] {.multisync, discardable.} =
